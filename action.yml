@@ -1,0 +1,21 @@
+name: 'Cloudformation Deploy'
+description: 'Deploys a Cloudformation stack'
+
+inputs:
+  stack-name:
+    description: 'Name of the Cloudformation stack'
+    required: true
+  parameter-overrides:
+    description: 'Override any Cloudformation parameter values'
+    required: false
+  capabilities:
+    description: "List of Cloudformation stack template capabilities to acknowledge. Defaults to 'CAPABILITY_IAM'"
+    required: false
+    default: "CAPABILITY_IAM"
+  role-arn:
+    description: "Cloudformation role used to manage the stack resources"
+    required: false
+    
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

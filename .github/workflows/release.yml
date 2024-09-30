@@ -1,0 +1,28 @@
+on:
+  push:
+    tags:
+      - 'v*'
+
+name: Create Release
+
+permissions:
+  packages: write
+  contents: write
+
+jobs:
+  build:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: main
+
+      - name: Create Release
+        uses: elgohr/Github-Release-Action@v5
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          title: ${{ github.ref }}
+          tag: ${{ github.ref }}
