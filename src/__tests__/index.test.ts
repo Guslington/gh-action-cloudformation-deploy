@@ -2,6 +2,7 @@ import { run, parseParameters, validateArn } from "../index"
 import * as core from '@actions/core'
 import { mockClient } from 'aws-sdk-client-mock'
 import {
+  Parameter,
   StackStatus,
   ChangeSetStatus,
   CloudFormationClient,
@@ -9,6 +10,7 @@ import {
   DescribeChangeSetCommand,
   CreateChangeSetCommand,
   DescribeStacksCommand,
+  GetTemplateSummaryCommand,
 } from '@aws-sdk/client-cloudformation'
 import 'aws-sdk-client-mock-jest'
 
@@ -25,6 +27,26 @@ describe("run", () => {
 
     mockCfnClient
     .reset()
+    .on(GetTemplateSummaryCommand)
+    .resolves({
+      Parameters: [
+        {
+          ParameterKey: "UUID",
+          ParameterType: "String",
+          NoEcho: false,
+          Description: "",
+        },
+        {
+          ParameterKey: "Name",
+          ParameterType: "String",
+          NoEcho: false,
+          Description: "",
+        },
+      ],
+      Capabilities: [ 
+        "CAPABILITY_IAM",
+      ],
+    })
     .on(DescribeStacksCommand)
     .resolvesOnce({
       Stacks: [
@@ -64,7 +86,7 @@ describe("run", () => {
     .resolves({ Status: ChangeSetStatus.CREATE_COMPLETE })
   })
 
-  it("should update the stack with parameters", async () => {
+  it("should update the stack with all parameters", async () => {
     var inputs = {} as any
     inputs['stack-name'] = 'my-stack'
     inputs['parameter-overrides'] = ['UUID=0F54400F-937E-46B9-8C4C-5D94833C9FB8','Name=test']
@@ -80,6 +102,14 @@ describe("run", () => {
 
     expect(mockCfnClient).toHaveReceivedNthCommandWith(
       1,
+      GetTemplateSummaryCommand,
+      {
+        StackName: 'my-stack',
+      }
+    )
+
+    expect(mockCfnClient).toHaveReceivedNthCommandWith(
+      2,
       CreateChangeSetCommand,
       {
         ChangeSetName: 'my-stack-changeset',
@@ -101,7 +131,7 @@ describe("run", () => {
     )
 
     expect(mockCfnClient).toHaveReceivedNthCommandWith(
-      2,
+      3,
       DescribeChangeSetCommand,
       {
         ChangeSetName: 'my-stack-changeset',
@@ -110,7 +140,7 @@ describe("run", () => {
     )
 
     expect(mockCfnClient).toHaveReceivedNthCommandWith(
-      3,
+      4,
       ExecuteChangeSetCommand,
       {
         ChangeSetName: 'my-stack-changeset',
@@ -119,12 +149,84 @@ describe("run", () => {
     )
 
     expect(mockCfnClient).toHaveReceivedNthCommandWith(
-      4,
+      5,
       DescribeStacksCommand,
       {
         StackName: 'my-stack'
       }
     )
+  })
+
+  it("should update the stack with only the parameters that are supplied", async () => {
+    var inputs = {} as any
+    inputs['stack-name'] = 'my-stack'
+    inputs['parameter-overrides'] = ['Name=test']
+    inputs['role-arn'] = 'arn:aws:iam::111111111111:role/role-name'
+    inputs['capabilities'] = ['CAPABILITY_IAM']
+
+    getInputSpy.mockImplementation(input => inputs[input as string])
+    getMultilineInputSpy.mockImplementation(input => inputs[input as string])
+    
+    await run()
+
+    expect(core.setFailed).not.toHaveBeenCalled()
+
+    expect(mockCfnClient).toHaveReceivedNthCommandWith(
+      1,
+      GetTemplateSummaryCommand,
+      {
+        StackName: 'my-stack',
+      }
+    )
+
+    expect(mockCfnClient).toHaveReceivedNthCommandWith(
+      2,
+      CreateChangeSetCommand,
+      {
+        ChangeSetName: 'my-stack-changeset',
+        StackName: 'my-stack',
+        UsePreviousTemplate: true,
+        RoleARN: 'arn:aws:iam::111111111111:role/role-name',
+        Capabilities: ['CAPABILITY_IAM'],
+        Parameters: [
+          {
+            ParameterKey: 'UUID',
+            UsePreviousValue: true
+          },
+          {
+            ParameterKey: 'Name',
+            ParameterValue: 'test'
+          }
+        ]
+      }
+    )
+
+    expect(mockCfnClient).toHaveReceivedNthCommandWith(
+      3,
+      DescribeChangeSetCommand,
+      {
+        ChangeSetName: 'my-stack-changeset',
+        StackName: 'my-stack'
+      }
+    )
+
+    expect(mockCfnClient).toHaveReceivedNthCommandWith(
+      4,
+      ExecuteChangeSetCommand,
+      {
+        ChangeSetName: 'my-stack-changeset',
+        StackName: 'my-stack'
+      }
+    )
+
+    expect(mockCfnClient).toHaveReceivedNthCommandWith(
+      5,
+      DescribeStacksCommand,
+      {
+        StackName: 'my-stack'
+      }
+    )
+
   })
 
   it("should update the stack with no parameters", async () => {
@@ -157,9 +259,18 @@ describe('Parse Parameters', () => {
     jest.clearAllMocks()
   })
 
-  test('returns parameters list from string', async () => {
-    let input: string[] = ['UUID=0F54400F-937E-46B9-8C4C-5D94833C9FB8','Name=test']
-    const parameters = parseParameters(input)
+  test('returns all parameters list from string', async () => {
+    let parameterOverrides: string[] = ['UUID=0F54400F-937E-46B9-8C4C-5D94833C9FB8','Name=test']
+    let templateParameters: Parameter[] =  [
+        {
+          ParameterKey: "UUID",
+        },
+        {
+          ParameterKey: "Name",
+        },
+      ]
+
+    const parameters = parseParameters(templateParameters, parameterOverrides)
     expect(parameters).toEqual([
       {
         ParameterKey: 'UUID',
@@ -168,6 +279,30 @@ describe('Parse Parameters', () => {
       {
         ParameterKey: 'Name',
         ParameterValue: 'test'
+      }
+    ])
+  })
+
+  test('sets use previous value if parameter not supplied', async () => {
+    let parameterOverrides: string[] = ['UUID=0F54400F-937E-46B9-8C4C-5D94833C9FB8']
+    let templateParameters: Parameter[] =  [
+        {
+          ParameterKey: "UUID",
+        },
+        {
+          ParameterKey: "Name",
+        },
+      ]
+
+    const parameters = parseParameters(templateParameters, parameterOverrides)
+    expect(parameters).toEqual([
+      {
+        ParameterKey: 'UUID',
+        ParameterValue: '0F54400F-937E-46B9-8C4C-5D94833C9FB8'
+      },
+      {
+        ParameterKey: 'Name',
+        UsePreviousValue: true
       }
     ])
   })

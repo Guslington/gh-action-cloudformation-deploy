@@ -8,6 +8,8 @@ import {
   CreateChangeSetCommand,
   ExecuteChangeSetCommand,
   CreateChangeSetCommandInput,
+  GetTemplateSummaryCommand,
+  GetTemplateSummaryCommandInput,
 } from '@aws-sdk/client-cloudformation'
 
 export function validateArn(arn: any) {
@@ -18,14 +20,39 @@ export function validateArn(arn: any) {
   throw new Error("Input role-arn is an invalid arn format")
 }
 
-export function parseParameters(parameterOverrides: string[]): Parameter[] {
-  return parameterOverrides.map(parameter => {
+export async function getTemplateParameters(cfnClient: CloudFormationClient, stackName: string): Promise<Parameter[]> {
+  const input: GetTemplateSummaryCommandInput = {
+    StackName: stackName
+  }
+
+  const response = await cfnClient.send(new GetTemplateSummaryCommand(input))
+
+  return response.Parameters!
+}
+
+export function parseParameters(templateParameters: Parameter[], parameterOverrides: string[]): Parameter[] {
+  let paramMap = new Map<string, string>()
+
+  parameterOverrides.map(parameter => {
     const values = parameter.trim().split('=')
 
-    return {
-      ParameterKey: values[0],
-      ParameterValue: values[1]
+    paramMap.set(values[0], values[1])
+  })
+
+  return templateParameters.map(param => {
+
+    if (paramMap.has(param.ParameterKey!)) {
+      return {
+        ParameterKey: param.ParameterKey,
+        ParameterValue: paramMap.get(param.ParameterKey!)
+      }
+    } else {
+      return {
+        ParameterKey: param.ParameterKey,
+        UsePreviousValue: true
+      }
     }
+    
   })
 }
 
@@ -91,15 +118,18 @@ export async function run() {
           Capabilities: capabilities,
         }
 
+        const cfnClient = new CloudFormationClient()
+
         if (parameterOverrides) {
-          changesetInput.Parameters = parseParameters(parameterOverrides)
+          const templateParameters = await getTemplateParameters(cfnClient, stackName)
+
+          changesetInput.Parameters = parseParameters(templateParameters, parameterOverrides)
         }
 
         if (roleArn) {
           changesetInput.RoleARN = validateArn(roleArn)
         }
 
-        const cfnClient = new CloudFormationClient()
         await updateStack(cfnClient, changesetInput)
 
         core.info('Cloudformation stack update is complete')
