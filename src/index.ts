@@ -42,11 +42,13 @@ export function parseParameters(templateParameters: Parameter[], parameterOverri
   return templateParameters.map(param => {
 
     if (paramMap.has(param.ParameterKey!)) {
+      core.info(`[Parameter] ${param.ParameterKey} => UpdateToValue: ${paramMap.get(param.ParameterKey!)}`)
       return {
         ParameterKey: param.ParameterKey,
         ParameterValue: paramMap.get(param.ParameterKey!)
       }
     } else {
+      core.info(`[Parameter] ${param.ParameterKey} => UsePreviousValue: true`)
       return {
         ParameterKey: param.ParameterKey,
         UsePreviousValue: true
