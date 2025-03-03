@@ -40,6 +40,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.validateArn = validateArn;
+exports.getTemplateParameters = getTemplateParameters;
 exports.parseParameters = parseParameters;
 exports.updateStack = updateStack;
 exports.run = run;
@@ -51,13 +52,36 @@ function validateArn(arn) {
     }
     throw new Error("Input role-arn is an invalid arn format");
 }
-function parseParameters(parameterOverrides) {
-    return parameterOverrides.map(parameter => {
-        const values = parameter.trim().split('=');
-        return {
-            ParameterKey: values[0],
-            ParameterValue: values[1]
+function getTemplateParameters(cfnClient, stackName) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const input = {
+            StackName: stackName
         };
+        const response = yield cfnClient.send(new client_cloudformation_1.GetTemplateSummaryCommand(input));
+        return response.Parameters;
+    });
+}
+function parseParameters(templateParameters, parameterOverrides) {
+    let paramMap = new Map();
+    parameterOverrides.map(parameter => {
+        const values = parameter.trim().split('=');
+        paramMap.set(values[0], values[1]);
+    });
+    return templateParameters.map(param => {
+        if (paramMap.has(param.ParameterKey)) {
+            core.info(`[Parameter] ${param.ParameterKey} => UpdateToValue: ${paramMap.get(param.ParameterKey)}`);
+            return {
+                ParameterKey: param.ParameterKey,
+                ParameterValue: paramMap.get(param.ParameterKey)
+            };
+        }
+        else {
+            core.info(`[Parameter] ${param.ParameterKey} => UsePreviousValue: true`);
+            return {
+                ParameterKey: param.ParameterKey,
+                UsePreviousValue: true
+            };
+        }
     });
 }
 function updateStack(cfnClient, changesetInput) {
@@ -107,13 +131,14 @@ function run() {
                 UsePreviousTemplate: true,
                 Capabilities: capabilities,
             };
+            const cfnClient = new client_cloudformation_1.CloudFormationClient();
             if (parameterOverrides) {
-                changesetInput.Parameters = parseParameters(parameterOverrides);
+                const templateParameters = yield getTemplateParameters(cfnClient, stackName);
+                changesetInput.Parameters = parseParameters(templateParameters, parameterOverrides);
             }
             if (roleArn) {
                 changesetInput.RoleARN = validateArn(roleArn);
             }
-            const cfnClient = new client_cloudformation_1.CloudFormationClient();
             yield updateStack(cfnClient, changesetInput);
             core.info('Cloudformation stack update is complete');
         }
