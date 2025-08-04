@@ -7,6 +7,7 @@ import {
   waitUntilStackUpdateComplete,
   CreateChangeSetCommand,
   ExecuteChangeSetCommand,
+  DeleteChangeSetCommand,
   CreateChangeSetCommandInput,
   GetTemplateSummaryCommand,
   GetTemplateSummaryCommandInput,
@@ -58,42 +59,70 @@ export function parseParameters(templateParameters: Parameter[], parameterOverri
   })
 }
 
+export async function cleanupChangeset(cfnClient: CloudFormationClient, changeSetName: string, stackName: string) {
+  try {
+    core.info(`Cleaning up failed changeset ${changeSetName}`)
+    await cfnClient.send(
+      new DeleteChangeSetCommand({
+        ChangeSetName: changeSetName,
+        StackName: stackName
+      })
+    )
+    core.info(`Successfully deleted changeset ${changeSetName}`)
+  } catch (cleanupError) {
+    // @ts-expect-error: Object is of type 'unknown'
+    core.warning(`Failed to cleanup changeset ${changeSetName}: ${cleanupError.message}`)
+  }
+}
+
 export async function updateStack(cfnClient: CloudFormationClient, changesetInput: CreateChangeSetCommandInput) {
-  core.info(`Creating CloudFormation Change Set ${changesetInput.ChangeSetName} for stack ${changesetInput.StackName}`)
-  await cfnClient.send(new CreateChangeSetCommand(changesetInput))
+  let changesetCreated = false
+  
+  try {
+    core.info(`Creating CloudFormation Change Set ${changesetInput.ChangeSetName} for stack ${changesetInput.StackName}`)
+    await cfnClient.send(new CreateChangeSetCommand(changesetInput))
+    changesetCreated = true
 
-  core.info('Waiting for CloudFormation changeset to create ...')
-  await waitUntilChangeSetCreateComplete(
-    { 
-      client: cfnClient, 
-      maxWaitTime: 1800, 
-      minDelay: 10
-    },
-    {
-      ChangeSetName: changesetInput.ChangeSetName,
-      StackName: changesetInput.StackName
+    core.info('Waiting for CloudFormation changeset to create ...')
+    await waitUntilChangeSetCreateComplete(
+      { 
+        client: cfnClient, 
+        maxWaitTime: 1800, 
+        minDelay: 10
+      },
+      {
+        ChangeSetName: changesetInput.ChangeSetName,
+        StackName: changesetInput.StackName
+      }
+    )
+
+    core.info(`Executing CloudFormation changeset ${changesetInput.ChangeSetName}`)
+    await cfnClient.send(
+      new ExecuteChangeSetCommand({
+        ChangeSetName: changesetInput.ChangeSetName,
+        StackName: changesetInput.StackName
+      })
+    )
+
+    core.info(`Waiting for CloudFormation stack ${changesetInput.StackName} to reach update complete ...`)
+    await waitUntilStackUpdateComplete(
+      {
+        client: cfnClient,
+        maxWaitTime: 43200,
+        minDelay: 10
+      },
+      {
+        StackName: changesetInput.StackName
+      }
+    )
+  } catch (error) {
+    // If changeset was created but failed later, clean it up
+    if (changesetCreated && changesetInput.ChangeSetName && changesetInput.StackName) {
+      await cleanupChangeset(cfnClient, changesetInput.ChangeSetName, changesetInput.StackName)
     }
-  )
-
-  core.info(`Executing CloudFormation changeset ${changesetInput.ChangeSetName}`)
-  await cfnClient.send(
-    new ExecuteChangeSetCommand({
-      ChangeSetName: changesetInput.ChangeSetName,
-      StackName: changesetInput.StackName
-    })
-  )
-
-  core.info(`Waiting for CloudFormation stack ${changesetInput.StackName} to reach update complete ...`)
-  await waitUntilStackUpdateComplete(
-    {
-      client: cfnClient,
-      maxWaitTime: 43200,
-      minDelay: 10
-    },
-    {
-      StackName: changesetInput.StackName
-    }
-  )
+    // Re-throw the original error
+    throw error
+  }
 }
 
 
