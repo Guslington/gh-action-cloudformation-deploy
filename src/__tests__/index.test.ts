@@ -1,4 +1,4 @@
-import { run, parseParameters, validateArn } from "../index"
+import { run, parseParameters, validateArn, cleanupChangeset } from "../index"
 import * as core from '@actions/core'
 import { mockClient } from 'aws-sdk-client-mock'
 import {
@@ -9,6 +9,7 @@ import {
   ExecuteChangeSetCommand,
   DescribeChangeSetCommand,
   CreateChangeSetCommand,
+  DeleteChangeSetCommand,
   DescribeStacksCommand,
   GetTemplateSummaryCommand,
 } from '@aws-sdk/client-cloudformation'
@@ -322,5 +323,49 @@ describe('Validate Role ARN', () => {
   test('throws invalid arn', async () => {
     const roleArn = 'arn:aws:ec2::111111111111:instance/i-abc123'
     expect(() => {validateArn(roleArn)}).toThrow(Error)
+  })
+})
+
+describe('Cleanup Changeset', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    mockCfnClient.reset()
+  })
+
+  test('successfully deletes changeset', async () => {
+    mockCfnClient
+      .on(DeleteChangeSetCommand)
+      .resolves({})
+
+    const cfnClient = new CloudFormationClient()
+    await cleanupChangeset(cfnClient, 'test-changeset', 'test-stack')
+
+    expect(mockCfnClient).toHaveReceivedCommandWith(
+      DeleteChangeSetCommand,
+      {
+        ChangeSetName: 'test-changeset',
+        StackName: 'test-stack'
+      }
+    )
+  })
+
+  test('handles deletion failure gracefully', async () => {
+    const mockError = new Error('Changeset not found')
+    mockCfnClient
+      .on(DeleteChangeSetCommand)
+      .rejects(mockError)
+
+    const cfnClient = new CloudFormationClient()
+    
+    // Should not throw an error even if deletion fails
+    await expect(cleanupChangeset(cfnClient, 'test-changeset', 'test-stack')).resolves.not.toThrow()
+
+    expect(mockCfnClient).toHaveReceivedCommandWith(
+      DeleteChangeSetCommand,
+      {
+        ChangeSetName: 'test-changeset',
+        StackName: 'test-stack'
+      }
+    )
   })
 })
