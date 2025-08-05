@@ -42,6 +42,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.validateArn = validateArn;
 exports.getTemplateParameters = getTemplateParameters;
 exports.parseParameters = parseParameters;
+exports.cleanupChangeset = cleanupChangeset;
 exports.updateStack = updateStack;
 exports.run = run;
 const core = __importStar(__nccwpck_require__(7484));
@@ -84,32 +85,60 @@ function parseParameters(templateParameters, parameterOverrides) {
         }
     });
 }
+function cleanupChangeset(cfnClient, changeSetName, stackName) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            core.info(`Cleaning up failed changeset ${changeSetName}`);
+            yield cfnClient.send(new client_cloudformation_1.DeleteChangeSetCommand({
+                ChangeSetName: changeSetName,
+                StackName: stackName
+            }));
+            core.info(`Successfully deleted changeset ${changeSetName}`);
+        }
+        catch (cleanupError) {
+            // @ts-expect-error: Object is of type 'unknown'
+            core.warning(`Failed to cleanup changeset ${changeSetName}: ${cleanupError.message}`);
+        }
+    });
+}
 function updateStack(cfnClient, changesetInput) {
     return __awaiter(this, void 0, void 0, function* () {
-        core.info(`Creating CloudFormation Change Set ${changesetInput.ChangeSetName} for stack ${changesetInput.StackName}`);
-        yield cfnClient.send(new client_cloudformation_1.CreateChangeSetCommand(changesetInput));
-        core.info('Waiting for CloudFormation changeset to create ...');
-        yield (0, client_cloudformation_1.waitUntilChangeSetCreateComplete)({
-            client: cfnClient,
-            maxWaitTime: 1800,
-            minDelay: 10
-        }, {
-            ChangeSetName: changesetInput.ChangeSetName,
-            StackName: changesetInput.StackName
-        });
-        core.info(`Executing CloudFormation changeset ${changesetInput.ChangeSetName}`);
-        yield cfnClient.send(new client_cloudformation_1.ExecuteChangeSetCommand({
-            ChangeSetName: changesetInput.ChangeSetName,
-            StackName: changesetInput.StackName
-        }));
-        core.info(`Waiting for CloudFormation stack ${changesetInput.StackName} to reach update complete ...`);
-        yield (0, client_cloudformation_1.waitUntilStackUpdateComplete)({
-            client: cfnClient,
-            maxWaitTime: 43200,
-            minDelay: 10
-        }, {
-            StackName: changesetInput.StackName
-        });
+        let changesetCreated = false;
+        try {
+            core.info(`Creating CloudFormation Change Set ${changesetInput.ChangeSetName} for stack ${changesetInput.StackName}`);
+            yield cfnClient.send(new client_cloudformation_1.CreateChangeSetCommand(changesetInput));
+            changesetCreated = true;
+            core.info('Waiting for CloudFormation changeset to create ...');
+            yield (0, client_cloudformation_1.waitUntilChangeSetCreateComplete)({
+                client: cfnClient,
+                maxWaitTime: 1800,
+                minDelay: 10
+            }, {
+                ChangeSetName: changesetInput.ChangeSetName,
+                StackName: changesetInput.StackName
+            });
+            core.info(`Executing CloudFormation changeset ${changesetInput.ChangeSetName}`);
+            yield cfnClient.send(new client_cloudformation_1.ExecuteChangeSetCommand({
+                ChangeSetName: changesetInput.ChangeSetName,
+                StackName: changesetInput.StackName
+            }));
+            core.info(`Waiting for CloudFormation stack ${changesetInput.StackName} to reach update complete ...`);
+            yield (0, client_cloudformation_1.waitUntilStackUpdateComplete)({
+                client: cfnClient,
+                maxWaitTime: 43200,
+                minDelay: 10
+            }, {
+                StackName: changesetInput.StackName
+            });
+        }
+        catch (error) {
+            // If changeset was created but failed later, clean it up
+            if (changesetCreated && changesetInput.ChangeSetName && changesetInput.StackName) {
+                yield cleanupChangeset(cfnClient, changesetInput.ChangeSetName, changesetInput.StackName);
+            }
+            // Re-throw the original error
+            throw error;
+        }
     });
 }
 function run() {
